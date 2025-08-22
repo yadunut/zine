@@ -1,47 +1,57 @@
 {
+  description = "An empty project that uses Zig.";
+
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    zig2nix = {
-      url = "github:Cloudef/zig2nix";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
+    zig = {
+      url = "github:mitchellh/zig-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    zls-overlay = {
+      url = "github:zigtools/zls";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
-  outputs = {
-    self,
-    nixpkgs,
-    zig2nix,
-    ...
-  }: let
-    inherit (nixpkgs) lib;
-    forAllSystems = body:
-      lib.genAttrs lib.systems.flakeExposed (system:
-        body {
-          inherit system;
-          pkgs = nixpkgs.legacyPackages.${system};
-          env = zig2nix.outputs.zig-env.${system} {
-            nixpkgs = nixpkgs;
-          };
+
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      ...
+    }@inputs:
+    let
+      overlays = [
+        # Other overlays
+        (final: prev: {
+          zigpkgs = inputs.zig.packages.${prev.system};
+          zlspkgs = inputs.zls-overlay.packages.${prev.system};
+        })
+      ];
+
+      # Our supported systems are the same supported systems as the Zig binaries
+      systems = builtins.attrNames inputs.zig.packages;
+    in
+    flake-utils.lib.eachSystem systems (
+      system:
+      let
+        pkgs = import nixpkgs { inherit overlays system; };
+        zig = pkgs.zigpkgs.master;
+        zls = pkgs.zlspkgs.zls.overrideAttrs (prev: {
+          nativeBuildInputs = [ zig ];
         });
-  in {
-    packages = forAllSystems (
+      in
       {
-        system,
-        env,
-        ...
-      }: {
-        zine = env.package {
-          src = lib.cleanSource ./.;
-          nativeBuildInputs = [];
-          buildInputs = [];
-          zigPreferMusl = false;
+        devShells.default = pkgs.mkShell {
+          nativeBuildInputs = [
+            zig
+            zls
+          ];
         };
-        default = self.packages.${system}.zine;
+
+        # For compatibility with older versions of the `nix` binary
+        devShell = self.devShells.${system}.default;
       }
     );
-    devShells = forAllSystems (
-      {env, ...}: {
-        default = env.mkShell {};
-      }
-    );
-  };
 }
